@@ -1,7 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const mongoose = require('mongoose');
 
 const app = express();
 app.use(cors());
@@ -14,6 +16,15 @@ const io = new Server(server, {
     methods: ["GET", "POST"]
   }
 });
+
+// Connect to MongoDB
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/voip';
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('MongoDB Connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Define Routes
+app.use('/api/auth', require('./routes/auth'));
 
 const PORT = process.env.PORT || 5050;
 
