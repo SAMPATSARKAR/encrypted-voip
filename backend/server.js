@@ -28,57 +28,59 @@ app.use('/api/auth', require('./routes/auth'));
 
 const PORT = process.env.PORT || 5050;
 
-// Simple in-memory user store for now to get things working fast.
-// We can move to MongoDB later if requested.
-const users = {}; 
+// State to track users and rooms for Full Mesh Conference
+const users = {}; // Maps socket.id -> { roomID, username }
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // When a user logs in / registers their username
-  socket.on('register', (username) => {
-    users[username] = socket.id;
-    io.emit('users', Object.keys(users)); // Broadcast updated user list
-    console.log(`${username} registered with ID ${socket.id}`);
+  socket.on('join room', (data) => {
+    const { roomID, username } = data;
+    users[socket.id] = { roomID, username };
+    socket.join(roomID);
+
+    // Get all other users in this specific room
+    const usersInThisRoom = Object.entries(users)
+      .filter(([id, u]) => u.roomID === roomID && id !== socket.id)
+      .map(([id, u]) => ({ socketID: id, username: u.username }));
+
+    // Send the list of existing users to the person who just joined
+    socket.emit('all users', usersInThisRoom);
+    console.log(`${username} joined room ${roomID}`);
   });
 
-  // Signaling: Call a user
-  socket.on('callUser', (data) => {
-    const { userToCall, signalData, from, name } = data;
-    const socketIdToCall = users[userToCall];
-    if (socketIdToCall) {
-      io.to(socketIdToCall).emit('callUser', { signal: signalData, from, name });
-    }
+  // When a new user joins, they send an offer signal to each existing user
+  socket.on('sending signal', payload => {
+    // payload: { userToSignal, callerID, signal, username }
+    io.to(payload.userToSignal).emit('user joined', { 
+      signal: payload.signal, 
+      callerID: payload.callerID, 
+      username: payload.username 
+    });
   });
 
-  // Signaling: Answer a call
-  socket.on('answerCall', (data) => {
-    const socketIdToCall = users[data.to];
-    if (socketIdToCall) {
-      io.to(socketIdToCall).emit('callAccepted', data.signal);
-    }
+  // The existing user receives the offer, and sends an answer signal back
+  socket.on('returning signal', payload => {
+    // payload: { signal, callerID }
+    io.to(payload.callerID).emit('receiving returned signal', { 
+      signal: payload.signal, 
+      id: socket.id 
+    });
   });
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    // Find and remove user
-    let disconnectedUser = null;
-    for (const [username, id] of Object.entries(users)) {
-      if (id === socket.id) {
-        disconnectedUser = username;
-        delete users[username];
-        break;
-      }
+    const user = users[socket.id];
+    if (user) {
+      // Notify others in the room that this user left
+      socket.to(user.roomID).emit('user left', socket.id);
+      delete users[socket.id];
     }
-    if (disconnectedUser) {
-      io.emit('users', Object.keys(users));
-    }
-    socket.broadcast.emit('callEnded');
   });
 });
 
 app.get('/', (req, res) => {
-  res.send('Server is running');
+  res.send('Conference Server is running');
 });
 
 server.listen(PORT, () => {
