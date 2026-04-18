@@ -279,3 +279,44 @@ video {
   border-radius: 6px;
   border-left: 3px solid var(--accent-color);
 }
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  body {
+    align-items: flex-start;
+  }
+  
+  .app-container {
+    border-radius: 0;
+    min-height: 100vh;
+    border: none;
+  }
+  
+  .main-content {
+    flex-direction: column;
+    padding: 16px;
+    gap: 16px;
+  }
+  
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding-right: 0;
+    padding-bottom: 16px;
+  }
+  
+  .header {
+    padding: 16px;
+  }
+  
+  .call-area {
+    padding: 16px;
+  }
+  
+  .login-box {
+    margin: 16px;
+    padding: 24px;
+    width: auto;
+  }
+}
