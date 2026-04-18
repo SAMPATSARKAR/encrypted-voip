@@ -3,6 +3,7 @@ import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import { Phone, PhoneOff, Mic, MicOff, Lock, ShieldCheck, User, LogOut } from 'lucide-react';
 import axios from 'axios';
+import { useGoogleLogin } from '@react-oauth/google';
 
 const SERVER_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5050';
 
@@ -82,9 +83,23 @@ function App() {
     window.location.reload();
   };
 
-  const handleGoogleLogin = () => {
-    alert("To enable Google OAuth, you must provide a Google Client ID in the code. For now, please use the Email & Password form above!");
-  };
+  const handleGoogleLogin = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      try {
+        const res = await axios.post(`${SERVER_URL}/api/auth/google`, { 
+          credential: tokenResponse.access_token 
+        });
+        localStorage.setItem('token', res.data.token);
+        setToken(res.data.token);
+        setUsername(res.data.username);
+      } catch (err) {
+        setAuthError(err.response?.data?.msg || 'Google Authentication failed.');
+      }
+    },
+    onError: () => {
+      setAuthError('Google Login popup was closed or failed.');
+    }
+  });
 
   // --- CRYPTOGRAPHY ---
   useEffect(() => {
@@ -337,7 +352,7 @@ function App() {
 
           <div className="auth-divider">OR</div>
 
-          <button className="btn google-btn" onClick={handleGoogleLogin}>
+          <button type="button" className="btn google-btn" onClick={() => handleGoogleLogin()}>
             <svg viewBox="0 0 24 24" width="20" height="20" style={{ marginRight: '8px' }}>
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
               <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
