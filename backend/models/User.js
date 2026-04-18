@@ -10,12 +10,17 @@ const UserSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true
+    required: false // Optional, as Google OAuth users won't have a password
   },
   username: {
     type: String,
     required: true,
     trim: true
+  },
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true // Allows multiple users to NOT have a googleId
   },
   createdAt: {
     type: Date,

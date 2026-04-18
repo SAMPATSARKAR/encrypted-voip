@@ -2,7 +2,10 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '309372709932-35cueldgo77ssqm2gnit2bnnr40bqeab.apps.googleusercontent.com');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_fallback_key';
 
@@ -95,6 +98,64 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server error');
+  }
+});
+
+// @route   POST /api/auth/google
+// @desc    Authenticate user with Google & get token
+// @access  Public
+router.post('/google', async (req, res) => {
+  const { credential } = req.body;
+  try {
+    const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${credential}` }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch user profile from Google');
+    }
+    
+    const payload = await response.json();
+    const { email, name, sub: googleId } = payload;
+
+    // Check if user exists
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      // Create new user if they don't exist
+      user = new User({
+        username: name || email.split('@')[0],
+        email,
+        googleId
+      });
+      await user.save();
+    } else if (!user.googleId) {
+      // Link Google account to existing user
+      user.googleId = googleId;
+      await user.save();
+    }
+
+    // Create JWT payload
+    const jwtPayload = {
+      user: {
+        id: user.id,
+        username: user.username
+      }
+    };
+
+    // Sign token
+    jwt.sign(
+      jwtPayload,
+      JWT_SECRET,
+      { expiresIn: '5h' },
+      (err, token) => {
+        if (err) throw err;
+        res.json({ token, username: user.username });
+      }
+    );
+  } catch (err) {
+    console.error('Google Auth Error:', err.message);
+    res.status(500).send('Server error during Google Authentication');
   }
 });
 
