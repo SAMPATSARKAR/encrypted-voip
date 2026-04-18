@@ -1,11 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
-import { Phone, PhoneOff, Mic, MicOff, Lock, ShieldCheck, User, LogOut } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Lock, ShieldCheck, LogOut, Users, MessageSquare } from 'lucide-react';
 import axios from 'axios';
 import { useGoogleLogin } from '@react-oauth/google';
 
 const SERVER_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5050';
+
+// Separate Component for Remote Audio to properly attach streams
+const AudioElement = ({ peer }) => {
+  const ref = useRef();
+  useEffect(() => {
+    peer.on("stream", stream => {
+      if (ref.current) {
+        ref.current.srcObject = stream;
+        ref.current.play().catch(e => console.log('Audio play error:', e));
+      }
+    });
+  }, [peer]);
+  return <audio playsInline autoPlay ref={ref} style={{ display: 'none' }} />;
+};
 
 function App() {
   // Auth State
@@ -16,44 +30,32 @@ function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [authError, setAuthError] = useState('');
 
+  // Socket & Conference State
   const [socket, setSocket] = useState(null);
-  const [users, setUsers] = useState([]);
-  
-  // Call State
+  const [inRoom, setInRoom] = useState(false);
+  const [roomID, setRoomID] = useState('');
+  const [peers, setPeers] = useState([]); // [{ peerID, username, peer }]
   const [stream, setStream] = useState(null);
-  const [receivingCall, setReceivingCall] = useState(false);
-  const [caller, setCaller] = useState('');
-  const [callerSignal, setCallerSignal] = useState(null);
-  const [callAccepted, setCallAccepted] = useState(false);
-  const [callEnded, setCallEnded] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-
+  
   // E2EE Chat State
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
-  const [cryptoState, setCryptoState] = useState('Waiting to exchange keys...');
-  const [sharedKey, setSharedKey] = useState(null);
-  const [keyPair, setKeyPair] = useState(null);
 
+  const peersRef = useRef([]); // mutable ref to track active peers
+  const keyPairRef = useRef(null);
+  const sharedKeysRef = useRef({}); // { peerID: AES-GCM shared key }
   const myVideo = useRef();
-  const userVideo = useRef();
-  const connectionRef = useRef();
-  const sharedKeyRef = useRef(null);
-  const ringtoneRef = useRef(null);
 
   // --- AUTHENTICATION ---
-  
-  // Check token on load
   useEffect(() => {
     if (token) {
-      axios.get(`${SERVER_URL}/api/auth/me`, {
-        headers: { 'x-auth-token': token }
-      }).then(res => {
-        setUsername(res.data.username);
-      }).catch(err => {
-        console.error(err);
-        logout();
-      });
+      axios.get(`${SERVER_URL}/api/auth/me`, { headers: { 'x-auth-token': token } })
+        .then(res => setUsername(res.data.username))
+        .catch(err => {
+          console.error(err);
+          logout();
+        });
     }
   }, [token]);
 
@@ -71,7 +73,7 @@ function App() {
       setToken(res.data.token);
       setUsername(res.data.username);
     } catch (err) {
-      setAuthError(err.response?.data?.msg || 'Authentication failed. Is MongoDB connected?');
+      setAuthError(err.response?.data?.msg || 'Authentication failed.');
     }
   };
 
@@ -86,9 +88,7 @@ function App() {
   const handleGoogleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
       try {
-        const res = await axios.post(`${SERVER_URL}/api/auth/google`, { 
-          credential: tokenResponse.access_token 
-        });
+        const res = await axios.post(`${SERVER_URL}/api/auth/google`, { credential: tokenResponse.access_token });
         localStorage.setItem('token', res.data.token);
         setToken(res.data.token);
         setUsername(res.data.username);
@@ -96,9 +96,7 @@ function App() {
         setAuthError(err.response?.data?.msg || 'Google Authentication failed.');
       }
     },
-    onError: () => {
-      setAuthError('Google Login popup was closed or failed.');
-    }
+    onError: () => setAuthError('Google Login popup was closed or failed.')
   });
 
   // --- CRYPTOGRAPHY ---
@@ -109,7 +107,7 @@ function App() {
         true,
         ['deriveKey', 'deriveBits']
       );
-      setKeyPair(kp);
+      keyPairRef.current = kp;
     }
     generateKeys();
   }, []);
@@ -121,9 +119,7 @@ function App() {
 
   const importPublicKey = async (keyArray) => {
     const keyData = new Uint8Array(keyArray).buffer;
-    return await window.crypto.subtle.importKey(
-      'raw', keyData, { name: 'ECDH', namedCurve: 'P-256' }, true, []
-    );
+    return await window.crypto.subtle.importKey('raw', keyData, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
   };
 
   const deriveSharedKey = async (privateKey, publicKey) => {
@@ -139,9 +135,7 @@ function App() {
   const encryptMessage = async (text, key) => {
     const enc = new TextEncoder();
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await window.crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv }, key, enc.encode(text)
-    );
+    const ciphertext = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, enc.encode(text));
     return { iv: Array.from(iv), ciphertext: Array.from(new Uint8Array(ciphertext)) };
   };
 
@@ -158,141 +152,178 @@ function App() {
     }
   };
 
-  // --- WEBRTC & SOCKET ---
-  
-  useEffect(() => {
-    if (receivingCall && !callAccepted && !callEnded && ringtoneRef.current) {
-      ringtoneRef.current.play().catch(e => console.log(e));
-    } else if (ringtoneRef.current) {
-      ringtoneRef.current.pause();
-      ringtoneRef.current.currentTime = 0;
-    }
-  }, [receivingCall, callAccepted, callEnded]);
-
+  // --- SOCKET INIT ---
   useEffect(() => {
     if (token && username) {
       const newSocket = io(SERVER_URL);
       setSocket(newSocket);
-
-      navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
-        setStream(currentStream);
-        if (myVideo.current) myVideo.current.srcObject = currentStream;
-      });
-
-      newSocket.emit('register', username);
-
-      newSocket.on('users', (userList) => {
-        setUsers(userList.filter(u => u !== username));
-      });
-
-      newSocket.on('callUser', (data) => {
-        setReceivingCall(true);
-        setCaller(data.from);
-        setCallerSignal(data.signal);
-      });
-
-      newSocket.on('callEnded', leaveCall);
-
-      return () => newSocket.close();
+      return () => newSocket.disconnect();
     }
   }, [token, username]);
 
-  const setupPeerDataChannel = (peer) => {
+  // --- MESH WEBRTC LOGIC ---
+  useEffect(() => {
+    if (!socket || !stream) return;
+
+    socket.on("all users", usersInRoom => {
+      const newPeers = [];
+      usersInRoom.forEach(user => {
+        const peer = createPeer(user.socketID, socket.id, stream, user.username);
+        const peerObj = { peerID: user.socketID, peer, username: user.username };
+        peersRef.current.push(peerObj);
+        newPeers.push(peerObj);
+      });
+      setPeers(newPeers);
+    });
+
+    socket.on("user joined", payload => {
+      const peer = addPeer(payload.signal, payload.callerID, stream, payload.username);
+      const peerObj = { peerID: payload.callerID, peer, username: payload.username };
+      peersRef.current.push(peerObj);
+      setPeers(prev => [...prev, peerObj]);
+    });
+
+    socket.on("receiving returned signal", payload => {
+      const item = peersRef.current.find(p => p.peerID === payload.id);
+      if (item) {
+        item.peer.signal(payload.signal);
+      }
+    });
+
+    socket.on("user left", id => {
+      const peerObj = peersRef.current.find(p => p.peerID === id);
+      if (peerObj) peerObj.peer.destroy();
+      const newPeers = peersRef.current.filter(p => p.peerID !== id);
+      peersRef.current = newPeers;
+      setPeers(newPeers);
+      
+      // Cleanup shared key
+      const keys = { ...sharedKeysRef.current };
+      delete keys[id];
+      sharedKeysRef.current = keys;
+    });
+
+    return () => {
+      socket.off("all users");
+      socket.off("user joined");
+      socket.off("receiving returned signal");
+      socket.off("user left");
+    };
+  }, [socket, stream]);
+
+  // Pairwise Data Channel Setup for E2EE Chat
+  const setupPeerDataChannel = (peer, peerID, remoteUsername) => {
     peer.on('data', async (data) => {
       const parsed = JSON.parse(data.toString());
       if (parsed.type === 'PUBLIC_KEY') {
-        setCryptoState('Received peer key. Deriving AES-256...');
         try {
           const peerPubKey = await importPublicKey(parsed.key);
-          const sharedSecret = await deriveSharedKey(keyPair.privateKey, peerPubKey);
-          setSharedKey(sharedSecret);
-          sharedKeyRef.current = sharedSecret;
-          setCryptoState('E2EE Secured (AES-256 GCM)');
+          const sharedSecret = await deriveSharedKey(keyPairRef.current.privateKey, peerPubKey);
+          sharedKeysRef.current[peerID] = sharedSecret;
+          console.log(`Pairwise AES-256 Key Established with ${remoteUsername}`);
         } catch (e) {
-          setCryptoState('Error deriving key.');
+          console.error('Error deriving key with peer.', e);
         }
       } else if (parsed.type === 'CHAT_MESSAGE') {
-        if (sharedKeyRef.current) {
-          const decryptedText = await decryptMessage(parsed.payload, sharedKeyRef.current);
-          setMessages(prev => [...prev, { sender: 'Peer', text: decryptedText }]);
+        const sharedSecret = sharedKeysRef.current[peerID];
+        if (sharedSecret) {
+          const decryptedText = await decryptMessage(parsed.payload, sharedSecret);
+          setMessages(prev => [...prev, { sender: remoteUsername, text: decryptedText }]);
         }
       }
     });
 
     peer.on('connect', async () => {
-      if (keyPair) {
-        setCryptoState('Sending public key...');
-        const pubKeyArray = await exportPublicKey(keyPair.publicKey);
+      if (keyPairRef.current) {
+        const pubKeyArray = await exportPublicKey(keyPairRef.current.publicKey);
         peer.send(JSON.stringify({ type: 'PUBLIC_KEY', key: pubKeyArray }));
       }
     });
   };
 
-  const callUser = (userToCall) => {
+  const createPeer = (userToSignal, callerID, stream, remoteUsername) => {
     const peer = new Peer({
-      initiator: true, trickle: false, stream: stream,
+      initiator: true,
+      trickle: false,
+      stream,
       config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
     });
 
-    peer.on('error', err => setCryptoState('Error: ' + err.message));
-    setupPeerDataChannel(peer);
-
-    peer.on('signal', data => {
-      socket.emit('callUser', { userToCall, signalData: data, from: username });
+    peer.on("signal", signal => {
+      socket.emit("sending signal", { userToSignal, callerID, signal, username });
     });
 
-    peer.on('stream', currentStream => {
-      if (userVideo.current) {
-        userVideo.current.srcObject = currentStream;
-        userVideo.current.play().catch(e => console.log(e));
-      }
-    });
-
-    socket.on('callAccepted', signal => {
-      setCallAccepted(true);
-      peer.signal(signal);
-    });
-
-    connectionRef.current = peer;
+    setupPeerDataChannel(peer, userToSignal, remoteUsername);
+    return peer;
   };
 
-  const answerCall = () => {
-    setCallAccepted(true);
+  const addPeer = (incomingSignal, callerID, stream, remoteUsername) => {
     const peer = new Peer({
-      initiator: false, trickle: false, stream: stream,
+      initiator: false,
+      trickle: false,
+      stream,
       config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
     });
 
-    peer.on('error', err => setCryptoState('Error: ' + err.message));
-    setupPeerDataChannel(peer);
-
-    peer.on('signal', data => socket.emit('answerCall', { signal: data, to: caller }));
-
-    peer.on('stream', currentStream => {
-      if (userVideo.current) {
-        userVideo.current.srcObject = currentStream;
-        userVideo.current.play().catch(e => console.log(e));
-      }
+    peer.on("signal", signal => {
+      socket.emit("returning signal", { signal, callerID });
     });
 
-    peer.signal(callerSignal);
-    connectionRef.current = peer;
+    peer.signal(incomingSignal);
+    setupPeerDataChannel(peer, callerID, remoteUsername);
+    return peer;
   };
 
-  const leaveCall = () => {
-    setCallEnded(true);
-    if (connectionRef.current) connectionRef.current.destroy();
+  const handleJoinRoom = (e) => {
+    e.preventDefault();
+    if (!roomID.trim()) return;
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+        .then((currentStream) => {
+          setStream(currentStream);
+          if (myVideo.current) myVideo.current.srcObject = currentStream;
+          socket.emit("join room", { roomID, username });
+          setInRoom(true);
+        })
+        .catch((err) => {
+          console.error("Microphone Error:", err);
+          alert("Could not access microphone. Please ensure permissions are granted.");
+        });
+    } else {
+      alert("Microphone access is blocked. This usually happens if you are not using HTTPS or localhost.");
+    }
+  };
+
+  const leaveRoom = () => {
+    peersRef.current.forEach(p => p.peer.destroy());
+    peersRef.current = [];
+    setPeers([]);
+    sharedKeysRef.current = {};
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    setStream(null);
+    setInRoom(false);
+    setRoomID('');
+    setMessages([]);
+    socket.emit("disconnect"); // Trigger user left immediately
     window.location.reload();
   };
 
-  const sendChatMessage = async (e) => {
+  const sendGroupMessage = async (e) => {
     e.preventDefault();
-    if (messageInput.trim() && sharedKey && connectionRef.current) {
-      const encryptedPayload = await encryptMessage(messageInput, sharedKey);
-      connectionRef.current.send(JSON.stringify({ type: 'CHAT_MESSAGE', payload: encryptedPayload }));
-      setMessages(prev => [...prev, { sender: 'You', text: messageInput }]);
-      setMessageInput('');
+    if (!messageInput.trim()) return;
+
+    // Encrypt and send individually to each peer using pairwise keys
+    for (const p of peersRef.current) {
+      const sharedSecret = sharedKeysRef.current[p.peerID];
+      if (sharedSecret) {
+        const encryptedPayload = await encryptMessage(messageInput, sharedSecret);
+        p.peer.send(JSON.stringify({ type: 'CHAT_MESSAGE', payload: encryptedPayload }));
+      }
     }
+    
+    setMessages(prev => [...prev, { sender: 'You', text: messageInput }]);
+    setMessageInput('');
   };
 
   const toggleMute = () => {
@@ -306,52 +337,32 @@ function App() {
   // --- RENDER ---
   if (!token || !username) {
     return (
-      <div className="auth-container">
-        <div className="glass-panel auth-box">
-          <ShieldCheck size={56} color="#3b82f6" style={{ margin: '0 auto 16px' }} />
+      <div className="auth-wrapper">
+        <div className="auth-card">
+          <ShieldCheck size={64} color="var(--accent-cyan)" style={{ margin: '0 auto 16px', filter: 'drop-shadow(0 0 10px rgba(0, 242, 254, 0.5))' }} />
           <h2>Welcome Back</h2>
           <p>Sign in to the secure VoIP network</p>
-          
-          {authError && <div style={{ color: '#ef4444', marginBottom: '16px', fontSize: '0.9rem' }}>{authError}</div>}
-          
+          {authError && <div style={{ color: 'var(--danger)', marginBottom: '16px', fontSize: '0.9rem', fontWeight: 500 }}>{authError}</div>}
           <form className="auth-form" onSubmit={handleAuth}>
             {isRegistering && (
-              <input 
-                type="text" 
-                placeholder="Choose a Username" 
-                className="input-field" 
-                value={username} 
-                onChange={e => setUsername(e.target.value)} 
-                required 
-              />
+              <div className="input-group">
+                <input type="text" placeholder="Choose a Username" className="input-field" value={username} onChange={e => setUsername(e.target.value)} required />
+              </div>
             )}
-            <input 
-              type="email" 
-              placeholder="Email Address" 
-              className="input-field" 
-              value={email} 
-              onChange={e => setEmail(e.target.value)} 
-              required 
-            />
-            <input 
-              type="password" 
-              placeholder="Password" 
-              className="input-field" 
-              value={password} 
-              onChange={e => setPassword(e.target.value)} 
-              required 
-            />
+            <div className="input-group">
+              <input type="email" placeholder="Email Address" className="input-field" value={email} onChange={e => setEmail(e.target.value)} required />
+            </div>
+            <div className="input-group">
+              <input type="password" placeholder="Password" className="input-field" value={password} onChange={e => setPassword(e.target.value)} required />
+            </div>
             <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }}>
               {isRegistering ? 'Create Account' : 'Sign In'}
             </button>
           </form>
-
-          <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setIsRegistering(!isRegistering)}>
+          <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem', marginTop: '16px' }} onClick={() => setIsRegistering(!isRegistering)}>
             {isRegistering ? 'Already have an account? Sign in' : 'Need an account? Register'}
           </button>
-
           <div className="auth-divider">OR</div>
-
           <button type="button" className="btn google-btn" onClick={() => handleGoogleLogin()}>
             <svg viewBox="0 0 24 24" width="20" height="20" style={{ marginRight: '8px' }}>
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -367,108 +378,112 @@ function App() {
   }
 
   return (
-    <div className="app-container glass-panel">
-      <div className="header">
-        <h1>Encrypted VoIP</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div className="status-indicator pulse-animation"></div>
-            <strong>{username}</strong>
-          </div>
+    <div className="app-container">
+      <div className="sidebar" style={{ width: '300px' }}>
+        <div className="sidebar-header">
+          <h1>E-VoIP Mesh</h1>
           <button className="btn btn-ghost" style={{ padding: '8px 12px' }} onClick={logout} title="Logout">
-            <LogOut size={16} />
+            <LogOut size={18} />
           </button>
         </div>
+        <div className="user-profile">
+          <div className="user-status-dot"></div>
+          <div>
+            <strong>{username}</strong>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Network Active</div>
+          </div>
+        </div>
+        
+        {inRoom && (
+          <div className="contacts-section">
+            <h3><Users size={16} style={{ display: 'inline', marginRight: '6px' }}/> Room: {roomID}</h3>
+            <ul className="user-list">
+              <li className="user-item" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                <span className="user-name"><strong>You</strong></span>
+              </li>
+              {peers.map((peer, index) => (
+                <li key={index} className="user-item">
+                  <span className="user-name">{peer.username}</span>
+                  <ShieldCheck size={16} color="var(--success)" title="Pairwise E2EE Secured" />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
-      <div className="main-content">
-        <div className="sidebar">
-          <h3>Online Contacts</h3>
-          <ul className="user-list">
-            {users.length === 0 ? (
-              <li style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No contacts online</li>
-            ) : (
-              users.map(u => (
-                <li key={u} className="user-item">
-                  <span className="user-name">
-                    <div style={{width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #a78bfa)', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-                      <User size={16} color="white"/>
-                    </div>
-                    {u}
-                  </span>
-                  <button className="btn btn-primary" style={{ padding: '8px' }} onClick={() => callUser(u)}>
-                    <Phone size={16} />
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-        </div>
+      <div className="call-area">
+        <div className="call-overlay"></div>
+        <audio playsInline muted ref={myVideo} autoPlay style={{ display: 'none' }} />
+        
+        {/* Render incoming streams from all peers */}
+        {peers.map((peer) => (
+          <AudioElement key={peer.peerID} peer={peer.peer} />
+        ))}
 
-        <div className="call-area">
-          <audio playsInline muted ref={myVideo} autoPlay style={{ display: 'none' }} />
-          <audio playsInline ref={userVideo} autoPlay style={{ display: 'none' }} />
-          <audio ref={ringtoneRef} src="/ringtone.wav" loop style={{ display: 'none' }} />
-
-          {!callAccepted && receivingCall ? (
-            <div style={{ textAlign: 'center' }}>
-              <div className="pulse-animation" style={{ width: 80, height: 80, borderRadius: '50%', background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px' }}>
-                <Phone size={40} color="#10b981" />
-              </div>
-              <h2 style={{ color: '#10b981', marginBottom: '8px' }}>Incoming Call</h2>
-              <p style={{ color: '#e2e8f0', marginBottom: '32px' }}><strong>{caller}</strong> is requesting a secure connection.</p>
-              <div className="controls" style={{ justifyContent: 'center' }}>
-                <button className="btn btn-success" onClick={answerCall}>
-                  <Phone size={20} /> Answer
+        <div className="call-content" style={{ width: '100%', maxWidth: '800px' }}>
+          {!inRoom ? (
+            <div className="room-join-card" style={{ textAlign: 'center', background: 'var(--bg-panel)', padding: '40px', borderRadius: '24px', backdropFilter: 'var(--glass-blur)', border: '1px solid var(--border-light)' }}>
+              <ShieldCheck size={80} color="var(--accent-cyan)" style={{ marginBottom: '20px', filter: 'drop-shadow(0 0 15px rgba(0,242,254,0.4))' }} />
+              <h2 style={{ fontSize: '2.5rem', marginBottom: '10px' }}>Join a Conference</h2>
+              <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>Enter a room code to establish an encrypted mesh network with your team.</p>
+              
+              <form onSubmit={handleJoinRoom} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '400px', margin: '0 auto' }}>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  placeholder="e.g. 'AlphaSquad' or 'Meeting123'" 
+                  value={roomID} 
+                  onChange={e => setRoomID(e.target.value)} 
+                  required 
+                />
+                <button type="submit" className="btn btn-primary" style={{ padding: '16px', fontSize: '1.1rem' }}>
+                  <Users size={20} style={{ marginRight: '8px' }} /> Enter Room
                 </button>
-                <button className="btn btn-danger" onClick={() => window.location.reload()}>
-                  <PhoneOff size={20} /> Reject
-                </button>
-              </div>
-            </div>
-          ) : callAccepted && !callEnded ? (
-            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-                <ShieldCheck size={48} color="#10b981" />
-                <h2 style={{ marginTop: '16px' }}>Secure Call Active</h2>
-                <div className="encryption-info">
-                  <Lock size={16} color="#10b981" /> {cryptoState}
-                </div>
-              </div>
-
-              {sharedKey && (
-                <div className="chat-container">
-                  <div className="messages">
-                    {messages.map((m, i) => (
-                      <div key={i} className="message">
-                        <span className="sender" style={{ color: m.sender === 'You' ? '#a78bfa' : '#60a5fa' }}>{m.sender}: </span>
-                        <span className="text">{m.text}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <form onSubmit={sendChatMessage} style={{ display: 'flex', gap: '8px' }}>
-                    <input type="text" className="input-field" placeholder="Type E2EE message..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
-                    <button type="submit" className="btn btn-primary">Send</button>
-                  </form>
-                </div>
-              )}
-
-              <div className="controls" style={{ justifyContent: 'center', marginTop: 'auto', paddingTop: '24px' }}>
-                <button className="btn" style={{ backgroundColor: isMuted ? '#ef4444' : 'rgba(255,255,255,0.1)' }} onClick={toggleMute}>
-                  {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
-                </button>
-                <button className="btn btn-danger" onClick={leaveCall}>
-                  <PhoneOff size={20} /> End Call
-                </button>
-              </div>
+              </form>
             </div>
           ) : (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-              <ShieldCheck size={80} style={{ opacity: 0.1, marginBottom: '24px' }} />
-              <h2 style={{ color: '#e2e8f0', marginBottom: '8px' }}>Ready to Connect</h2>
-              <p style={{ maxWidth: '300px', margin: '0 auto', lineHeight: '1.5' }}>
-                Select a contact from the sidebar to establish a military-grade encrypted VoIP connection.
-              </p>
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div className="radar-container" style={{ marginBottom: '20px' }}>
+                <div className="radar-ring"></div>
+                <div className="radar-ring"></div>
+                <div className="radar-ring"></div>
+                <div className="caller-avatar">
+                  <Users size={48} color="white" />
+                </div>
+              </div>
+              
+              <h2 style={{ fontSize: '2.2rem', fontWeight: 700 }}>Mesh Network Established</h2>
+              <div className="encryption-badge" style={{ marginBottom: '30px' }}>
+                <Lock size={16} /> AES-256 Pairwise Multi-Encryption Active
+              </div>
+
+              <div className="chat-container" style={{ width: '100%', maxWidth: '600px', height: '300px', marginBottom: '30px' }}>
+                <div className="messages">
+                  {messages.length === 0 && <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '20px' }}>End-to-End Encrypted Group Chat</div>}
+                  {messages.map((m, i) => (
+                    <div key={i} className={`message ${m.sender === 'You' ? 'you' : 'peer'}`}>
+                      <div style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '4px' }}>{m.sender}</div>
+                      <div>{m.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <form onSubmit={sendGroupMessage} style={{ display: 'flex', gap: '12px' }}>
+                  <input type="text" className="input-field" placeholder="Send encrypted message to room..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
+                  <button type="submit" className="btn btn-primary" style={{ padding: '0 24px' }}>
+                    <MessageSquare size={20} />
+                  </button>
+                </form>
+              </div>
+
+              <div className="controls-bar">
+                <button className="btn" style={{ backgroundColor: isMuted ? 'var(--danger)' : 'rgba(255,255,255,0.1)' }} onClick={toggleMute}>
+                  {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
+                </button>
+                <button className="btn btn-danger" onClick={leaveRoom}>
+                  <PhoneOff size={24} /> Leave
+                </button>
+              </div>
             </div>
           )}
         </div>
