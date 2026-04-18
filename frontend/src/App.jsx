@@ -233,8 +233,10 @@ function App() {
     });
 
     peer.on('stream', (currentStream) => {
+      console.log('Caller received remote stream');
       if (userVideo.current) {
         userVideo.current.srcObject = currentStream;
+        userVideo.current.play().catch(err => console.error('Audio play failed:', err));
       }
     });
 
@@ -272,8 +274,10 @@ function App() {
     });
 
     peer.on('stream', (currentStream) => {
+      console.log('Receiver received remote stream');
       if (userVideo.current) {
         userVideo.current.srcObject = currentStream;
+        userVideo.current.play().catch(err => console.error('Audio play failed:', err));
       }
     });
 
