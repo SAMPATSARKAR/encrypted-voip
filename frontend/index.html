@@ -1,13 +1,150 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Encrypted VoIP</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-VoIP Mesh | Secure Encrypted Calling</title>
+    <link rel="stylesheet" href="style.css?v=2">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Authentication Screen -->
+    <div id="auth-screen" class="auth-wrapper">
+        <div class="auth-card">
+            <i data-lucide="shield-check" class="auth-icon"></i>
+            <h2 id="auth-title">Welcome Back</h2>
+            <p id="auth-subtitle">Sign in to the secure VoIP network</p>
+            <div id="auth-error" class="error-message"></div>
+            
+            <form id="auth-form" class="auth-form">
+                <div id="username-group" class="input-group" style="display: none;">
+                    <input type="text" id="username" placeholder="Choose a Username" class="input-field">
+                </div>
+                <div class="input-group">
+                    <input type="email" id="email" placeholder="Email Address" class="input-field" required>
+                </div>
+                <div class="input-group">
+                    <input type="password" id="password" placeholder="Password" class="input-field" required>
+                </div>
+                <button type="submit" id="auth-submit" class="btn btn-primary" style="width: 100%; margin-top: 8px;">
+                    Sign In
+                </button>
+            </form>
+            
+            <button id="toggle-auth" class="btn btn-ghost" style="width: 100%; font-size: 0.85rem; margin-top: 16px;">
+                Need an account? Register
+            </button>
+            
+            <div class="auth-divider">OR</div>
+            
+            <div id="google-login-btn"></div>
+        </div>
+    </div>
+
+    <!-- Main Application Screen -->
+    <div id="app-screen" class="app-container" style="display: none;">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>E-VoIP Mesh</h1>
+                <button id="logout-btn" class="btn btn-ghost" style="padding: 8px 12px;" title="Logout">
+                    <i data-lucide="log-out" size="18"></i>
+                </button>
+            </div>
+            <div class="user-profile">
+                <div class="user-status-dot"></div>
+                <div>
+                    <strong id="display-username">Username</strong>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">Network Active</div>
+                </div>
+            </div>
+            
+            <div id="room-info" class="contacts-section" style="display: none;">
+                <h3 id="room-display-label"><i data-lucide="users" class="icon-inline"></i> Room Secured</h3>
+                <ul id="user-list" class="user-list">
+                    <li class="user-item" style="background: rgba(255,255,255,0.05)">
+                        <span class="user-name"><strong>You</strong></span>
+                    </li>
+                    <!-- Peer list will be injected here -->
+                </ul>
+            </div>
+        </div>
+
+        <div class="call-area">
+            <div class="call-overlay"></div>
+            <!-- Audio elements will be injected here -->
+            <div id="audio-container"></div>
+            <audio id="my-audio" playsinline muted autoplay style="display: none;"></audio>
+            
+            <div class="call-content">
+                <!-- Join Room View -->
+                <div id="join-room-view" class="room-join-card">
+                    <i data-lucide="shield-check" class="join-icon"></i>
+                    <h2>Join a Conference</h2>
+                    <p>Enter a room code to establish an encrypted mesh network with your team.</p>
+                    
+                    <form id="join-room-form" class="join-form">
+                        <input 
+                            type="text" 
+                            id="room-id-input"
+                            class="input-field" 
+                            placeholder="e.g. 'AlphaSquad' or 'Meeting123'" 
+                            required 
+                        >
+                        <button type="submit" class="btn btn-primary" style="padding: 16px; font-size: 1.1rem; width: 100%;">
+                            <i data-lucide="users" class="icon-btn"></i> Enter Room
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Active Call View -->
+                <div id="active-call-view" style="display: none; width: 100%; flex-direction: column; align-items: center;">
+                    <div id="participant-grid" class="participant-grid">
+                        <!-- Participants will be dynamically injected here -->
+                    </div>
+                    
+                    <h2>Mesh Network Established</h2>
+                    <div class="encryption-badge">
+                        <i data-lucide="lock" size="16"></i> AES-256 Pairwise Multi-Encryption Active
+                    </div>
+
+                    <div class="chat-container">
+                        <div id="chat-messages" class="messages">
+                            <div style="color: var(--text-muted); text-align: center; margin-top: 20px;">
+                                End-to-End Encrypted Group Chat
+                            </div>
+                        </div>
+                        <form id="chat-form" style="display: flex; gap: 12px;">
+                            <input type="text" id="chat-input" class="input-field" placeholder="Send encrypted message to room...">
+                            <button type="submit" class="btn btn-primary" style="padding: 0 24px;">
+                                <i data-lucide="message-square"></i>
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="controls-bar">
+                        <button id="mute-btn" class="btn">
+                            <i data-lucide="mic"></i>
+                        </button>
+                        <button id="leave-btn" class="btn btn-danger">
+                            <i data-lucide="phone-off"></i> Leave
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dependencies -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    
+    <script src="script.js?v=2"></script>
+</body>
 </html>
