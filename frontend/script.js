@@ -175,13 +175,23 @@ function setupGoogleLogin() {
 
 async function handleGoogleResponse(response) {
     try {
-        const res = await axios.post(`${SERVER_URL}/api/auth/google`, { credential: response.credential });
+        const res = await axios.post(`${SERVER_URL}/api/auth/google`, { token: response.credential });
         localStorage.setItem('token', res.data.token);
         state.token = res.data.token;
         state.username = res.data.username;
         showApp();
     } catch (err) {
-        elements.authError.innerText = 'Google Authentication failed.';
+        let errorMsg = 'Google Authentication failed.';
+        if (err.response) {
+            errorMsg = `Backend Error: ${err.response.status} - ${JSON.stringify(err.response.data)}`;
+        } else if (err.request) {
+            errorMsg = `Network Error: Could not reach backend at ${SERVER_URL}. Is it sleeping?`;
+        } else {
+            errorMsg = `Error: ${err.message}`;
+        }
+        console.error('Auth Error Details:', err);
+        elements.authError.innerText = errorMsg;
+        elements.authError.style.display = 'block';
     }
 }
 
