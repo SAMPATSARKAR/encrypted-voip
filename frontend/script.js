@@ -1,5 +1,7 @@
 // --- CONSTANTS & CONFIG ---
-const SERVER_URL = 'http://localhost:5050'; // Adjust for production if needed
+const SERVER_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1' 
+    ? 'http://localhost:5050' 
+    : 'https://encrypted-voip.onrender.com';
 const ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
