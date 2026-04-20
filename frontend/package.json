@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "http-server ./ -p 3000 -c-1",
-    "start": "http-server ./ -p 3000 -c-1"
+    "start": "http-server ./ -p 3000 -c-1",
+    "build": "echo 'Static Deployment'"
   },
   "dependencies": {
     "http-server": "^14.1.1"
