@@ -105,17 +105,14 @@ router.post('/login', async (req, res) => {
 // @desc    Authenticate user with Google & get token
 // @access  Public
 router.post('/google', async (req, res) => {
-  const { credential } = req.body;
+  const { token } = req.body; // Matches frontend 'token' key
   try {
-    const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { Authorization: `Bearer ${credential}` }
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID || '309372709932-35cueldgo77ssqm2gnit2bnnr40bqeab.apps.googleusercontent.com'
     });
     
-    if (!response.ok) {
-      throw new Error('Failed to fetch user profile from Google');
-    }
-    
-    const payload = await response.json();
+    const payload = ticket.getPayload();
     const { email, name, sub: googleId } = payload;
 
     // Check if user exists
