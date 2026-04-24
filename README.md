@@ -1,118 +1,101 @@
-End-to-end encrypted voice calls + chat using **AES-256-GCM** (symmetric) or **RSA-2048 + AES-GCM** (asymmetric), built with plain HTML/JS on the frontend and Node.js on the backend.
+# Encrypted VoIP Communication System (E-VoIP Mesh)
 
----
+A full-stack, secure Voice over IP (VoIP) application that enables end-to-end encrypted voice calling and text chat in a multi-peer mesh network.
 
-## Architecture
+## 🚀 Features
 
-```
-Browser A                Signaling Server           Browser B
-   │                    (Node.js + Socket.io)           │
-   │── join-room ──────────────────────────────────────>│
-   │<─ peer-joined (+ public key) ──────────────────────│
-   │                                                     │
-   │  [Asymmetric mode only]                             │
-   │── send-encrypted-key (AES key encrypted w/ RSA) ──>│
-   │                                                     │
-   │── WebRTC offer ─────────────────────────────────── │
-   │<─ WebRTC answer ────────────────────────────────── │
-   │                                                     │
-   │════ DataChannel: AES-GCM encrypted audio chunks ══>│
-   │<═══ AES-GCM encrypted audio chunks ════════════════│
-   │                                                     │
-   │── chat-message (AES-GCM encrypted text) ──────────>│
-```
+- **Secure Authentication:**
+  - Email and password registration/login with bcrypt password hashing.
+  - Social Login via Google Identity Services.
+  - JWT-based authentication for secure session management.
+- **Full Mesh WebRTC Conferencing:**
+  - Connect multiple participants in a single room seamlessly.
+  - Real-time voice communication using SimplePeer.
+- **End-to-End Encryption (E2EE):**
+  - **Key Exchange:** ECDH (Elliptic Curve Diffie-Hellman) using the P-256 curve.
+  - **Message Encryption:** AES-GCM (256-bit) encryption for pairwise secure communication.
+  - Ensures group chat messages are fully encrypted before leaving the browser.
+- **Real-Time Signaling:** Robust room and connection management using Socket.IO.
+- **Modern UI/UX:** Responsive, dark-themed interface built with vanilla HTML/CSS and Lucide icons.
 
-**The signaling server never sees audio or message content — only WebRTC handshake signals.**
+## 🛠️ Tech Stack
 
----
+**Frontend:**
+- HTML5, CSS3, JavaScript (Vanilla)
+- [SimplePeer](https://github.com/feross/simple-peer) (WebRTC)
+- [Socket.IO Client](https://socket.io/)
+- [Axios](https://axios-http.com/)
+- Google Identity Services (GSI)
 
-## Encryption Modes
+**Backend:**
+- [Node.js](https://nodejs.org/) & [Express.js](https://expressjs.com/)
+- [Socket.IO](https://socket.io/) (Signaling Server)
+- [MongoDB](https://www.mongodb.com/) & [Mongoose](https://mongoosejs.com/)
+- [JSON Web Tokens (JWT)](https://jwt.io/) & [bcryptjs](https://www.npmjs.com/package/bcryptjs)
 
-### 🔑 Symmetric (AES-256-GCM)
-- Both peers generate the **same** AES-256 key locally
-- ⚠️ In a real deployment, this key must be shared out-of-band (e.g., QR code, physical exchange)
-- In this demo both users share the same key by design
-- All audio chunks and chat messages are AES-GCM encrypted
+## 📂 Project Structure
 
-### 🗝️ Asymmetric (RSA-2048 + AES-GCM)
-1. Each peer generates an **RSA-2048 key pair** locally
-2. Public keys are exchanged through the signaling server
-3. The **caller** generates a random AES-256 session key
-4. The caller **encrypts the session key with the peer's RSA public key** and sends it
-5. The peer **decrypts it with their RSA private key**
-6. Both now share the same AES session key — audio and chat are encrypted with it
-
----
-
-## Project Structure
-
-```
-encrypted-voip/
-├── backend/
-│   ├── server.js          # Signaling server (Express + Socket.io)
-│   └── package.json
-└── frontend/
-    ├── index.html         # Main UI
-    ├── style.css          # Dark terminal styling
-    ├── crypto-utils.js    # Web Crypto API helpers (AES + RSA)
-    └── app.js             # App logic: WebRTC, encryption, signaling
+```text
+encrypted-voip-main/
+├── backend/            # Node.js/Express server
+│   ├── models/         # Mongoose schemas (e.g., User)
+│   ├── routes/         # Express API routes (e.g., auth)
+│   ├── server.js       # Main entry point & Socket.IO signaling logic
+│   └── package.json    # Backend dependencies
+└── frontend/           # Vanilla JS client application
+    ├── index.html      # Main application UI
+    ├── style.css       # Styling and themes
+    ├── script.js       # Core logic (WebRTC, Encryption, Socket, UI)
+    └── package.json    # Frontend scripts (http-server)
 ```
 
----
+## ⚙️ Setup and Installation
 
-## Setup & Running
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v16+ recommended)
+- [MongoDB](https://www.mongodb.com/) (Local instance or MongoDB Atlas)
 
-### 1. Start the Backend
+### 1. Clone the repository
+```bash
+git clone <repository-url>
+cd encrypted-voip-main
+```
 
+### 2. Backend Setup
 ```bash
 cd backend
 npm install
-npm run dev        # uses nodemon for hot reload
-# or: npm start
 ```
 
-Server runs at **http://localhost:3001**
+Create a `.env` file in the `backend` directory and add the following variables (adjust as necessary):
+```env
+PORT=5050
+MONGO_URI=mongodb://127.0.0.1:27017/voip
+JWT_SECRET=your_super_secret_jwt_key
+```
 
-### 2. Open the Frontend
+Start the backend server:
+```bash
+npm run dev
+# Server runs on http://localhost:5050
+```
 
-Since the frontend uses plain HTML/JS, just open it in a browser.
-For local development use a simple static server (needed for microphone access on some browsers):
-
+### 3. Frontend Setup
+Open a new terminal window/tab:
 ```bash
 cd frontend
-npx serve .        # or: python3 -m http.server 8080
+npm install
 ```
 
-Then open **http://lo
-calhost:8080** in **two different browser tabs or windows**.
+Start the frontend server:
+```bash
+npm run dev
+# App runs on http://localhost:3000
+```
 
-### 3. Make a Call
+## 🔒 Security Notes
+- **HTTPS Required for WebRTC:** Accessing the microphone and establishing WebRTC connections requires a secure context. When running locally, `http://localhost` or `http://127.0.0.1` works. For production, the frontend **must** be served over HTTPS.
+- **E2EE Details:** The encryption keys are generated client-side via Web Crypto API and are never sent to the signaling server. The signaling server only facilitates the exchange of public keys and encrypted payloads.
 
-1. In **Tab 1**: Choose encryption mode → click **"+ Create Room"** → copy the Room ID
-2. In **Tab 2**: Choose the **same** encryption mode → paste Room ID → click **"Join →"**
-3. Grant microphone access when prompted
-4. Click **"My Key"**, **"Peer's Key"**, **"Session Key"** to inspect the cryptographic keys in use
-5. Type in the chat box — messages are AES-GCM encrypted before being sent
-
----
-
-## Technologies
-
-| Layer | Technology |
-|---|---|
-| Audio capture | Web Audio API (`ScriptProcessorNode`) |
-| Encryption | Web Crypto API (`AES-GCM`, `RSA-OAEP`) |
-| Peer transport | WebRTC `RTCPeerConnection` + `DataChannel` |
-| Signaling | Socket.io over WebSocket |
-| Backend | Node.js + Express + Socket.io |
-| Frontend | Plain HTML5 + CSS3 + Vanilla JS |
-
----
-
-## Security Notes
-
-- Private keys **never leave the browser** — they are not sent to the server
-- The signaling server only relays WebRTC SDP/ICE and encrypted key material
-- Each session uses a **fresh AES key** (asymmetric mode) or a locally-generated key (symmetric mode)
-- IVs are randomly generated per-chunk (AES-GCM requirement)
-- For production: add HTTPS/WSS, TURN server credentials, and proper key verification (fingerprinting)
+## 🤝 Contributing
+Contributions are welcome! Feel free to open an issue or submit a pull request for improvements.
