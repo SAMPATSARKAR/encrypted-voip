@@ -98,4 +98,4 @@ npm run dev
 - **E2EE Details:** The encryption keys are generated client-side via Web Crypto API and are never sent to the signaling server. The signaling server only facilitates the exchange of public keys and encrypted payloads.
 
 ## 🤝 Contributing
-Contributions are welcome! Feel free to open an issue or submit a pull request for improvements.
+Contributions are welcome!
